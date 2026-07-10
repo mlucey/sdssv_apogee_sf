@@ -268,6 +268,8 @@ class APOGEESelectionFunction:
         nside_min: int = 8,
         h_bin_size: float | None = None,
         gh_bin_size: float | None = None,
+        h_range: tuple[float, float] | None = None,
+        gh_range: tuple[float, float] | None = None,
         denominator_path: str | Path | None = None,
     ) -> "APOGEESelectionFunction":
         """
@@ -285,13 +287,17 @@ class APOGEESelectionFunction:
         min_count : minimum 2MASS sources per adaptive cell before merging to a
             coarser resolution (default 5).
         nside_min : coarsest HEALPix resolution allowed by adaptive binning (default 8).
-        h_bin_size : H-magnitude bin width in magnitudes.  Must be a multiple of the
-            denominator's native 0.5-mag step (i.e. 0.5, 1.0, 1.5, …).
-            Defaults to the denominator's native resolution (0.5 mag).
-        gh_bin_size : G−H bin width, same rules as *h_bin_size*.
-            Only used in colour mode.
+        h_bin_size : H-magnitude bin width in magnitudes.  Must be a positive multiple
+            of the denominator's native 0.5-mag step (i.e. 0.5, 1.0, 1.5, …).
+            Defaults to the native resolution (0.5 mag).
+        gh_bin_size : G−H bin width, same rules as *h_bin_size*.  Only used in colour mode.
+        h_range : ``(lo, hi)`` tuple setting explicit H-magnitude limits.  Both values
+            must lie within the denominator's H range.  Defaults to the min/max of
+            the observed H values, rounded outward to the nearest 0.5-mag step.
+        gh_range : ``(lo, hi)`` tuple setting explicit G−H limits, same rules as
+            *h_range*.  Only used in colour mode.
         denominator_path : path to the pre-computed 2MASS denominator .npz.
-            When *None* the file is auto-downloaded to :func:`get_datadir`.
+            When *None* the bundled file is used.
 
         Returns
         -------
@@ -305,9 +311,10 @@ class APOGEESelectionFunction:
 
         Notes
         -----
-        The magnitude range is automatically restricted to the range present in
-        *observed*.  Stars outside the denominator's full range are warned about
-        and dropped.
+        By default the magnitude axes are restricted to the min/max of the input
+        table, rounded outward to the nearest 0.5-mag step.  Use *h_range* /
+        *gh_range* to set explicit limits instead.  Either way the limits must
+        fall within the denominator's coverage.
         """
         use_color = g_col is not None
 
@@ -379,21 +386,37 @@ class APOGEESelectionFunction:
                     UserWarning, stacklevel=2,
                 )
 
-        # ── Restrict denominator to data range ────────────────────────────────
-        h_valid = h[np.isfinite(h)]
-        h_lo = float(np.floor(h_valid.min() / _NATIVE_STEP) * _NATIVE_STEP) if len(h_valid) else h_denom_lo
-        h_hi = float(np.ceil( h_valid.max() / _NATIVE_STEP) * _NATIVE_STEP) if len(h_valid) else h_denom_hi
-        h_lo = max(h_lo, h_denom_lo)
-        h_hi = min(h_hi, h_denom_hi)
+        # ── Restrict denominator to requested or data range ───────────────────
+        if h_range is not None:
+            h_lo, h_hi = float(h_range[0]), float(h_range[1])
+            if h_lo < h_denom_lo or h_hi > h_denom_hi:
+                raise ValueError(
+                    f"h_range=({h_lo}, {h_hi}) falls outside the denominator bounds "
+                    f"[{h_denom_lo}, {h_denom_hi}]."
+                )
+        else:
+            h_valid = h[np.isfinite(h)]
+            h_lo = float(np.floor(h_valid.min() / _NATIVE_STEP) * _NATIVE_STEP) if len(h_valid) else h_denom_lo
+            h_hi = float(np.ceil( h_valid.max() / _NATIVE_STEP) * _NATIVE_STEP) if len(h_valid) else h_denom_hi
+            h_lo = max(h_lo, h_denom_lo)
+            h_hi = min(h_hi, h_denom_hi)
 
         hist_all_full, H_BINS = _restrict_range(hist_all_full, H_BINS_denom, h_lo, h_hi, axis=0)
 
         if use_color:
-            gh_arr = gh[np.isfinite(gh) & np.isfinite(h)]
-            gh_lo = float(np.floor(gh_arr.min() / _NATIVE_STEP) * _NATIVE_STEP) if len(gh_arr) else GH_BINS_denom[0]
-            gh_hi = float(np.ceil( gh_arr.max() / _NATIVE_STEP) * _NATIVE_STEP) if len(gh_arr) else GH_BINS_denom[-1]
-            gh_lo = max(gh_lo, GH_BINS_denom[0])
-            gh_hi = min(gh_hi, GH_BINS_denom[-1])
+            if gh_range is not None:
+                gh_lo, gh_hi = float(gh_range[0]), float(gh_range[1])
+                if gh_lo < GH_BINS_denom[0] or gh_hi > GH_BINS_denom[-1]:
+                    raise ValueError(
+                        f"gh_range=({gh_lo}, {gh_hi}) falls outside the denominator bounds "
+                        f"[{GH_BINS_denom[0]}, {GH_BINS_denom[-1]}]."
+                    )
+            else:
+                gh_arr = gh[np.isfinite(gh) & np.isfinite(h)]
+                gh_lo = float(np.floor(gh_arr.min() / _NATIVE_STEP) * _NATIVE_STEP) if len(gh_arr) else GH_BINS_denom[0]
+                gh_hi = float(np.ceil( gh_arr.max() / _NATIVE_STEP) * _NATIVE_STEP) if len(gh_arr) else GH_BINS_denom[-1]
+                gh_lo = max(gh_lo, GH_BINS_denom[0])
+                gh_hi = min(gh_hi, GH_BINS_denom[-1])
             hist_all_full, GH_BINS = _restrict_range(hist_all_full, GH_BINS_denom, gh_lo, gh_hi, axis=2)
         else:
             GH_BINS = GH_BINS_denom

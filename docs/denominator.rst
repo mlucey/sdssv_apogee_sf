@@ -21,10 +21,28 @@ HEALPix nside 64 (pixel size ≈ 55 arcmin) —
 Stars in your observed catalogue that fall outside these ranges will trigger a
 ``UserWarning`` and be excluded from the selection function.
 
-By default, ``from_observed`` restricts the magnitude axis to the min/max of
-your data, so you only use the denominator bins that are actually relevant.
-You can coarsen the binning in 0.5-mag steps using ``h_bin_size`` and
-``gh_bin_size``.
+Magnitude range and binning
+---------------------------
+
+By default, ``from_observed`` restricts the magnitude axes to the min/max of
+your observed data (rounded outward to the nearest 0.5-mag step), so you only
+use the denominator bins that are actually relevant.
+
+You can override this with explicit limits using ``h_range`` and ``gh_range``::
+
+    sf = APOGEESelectionFunction.from_observed(
+        observed,
+        h_col="h_mag",
+        h_range=(7.0, 13.5),   # must be within the denominator bounds
+        gh_range=(0.0, 8.0),   # colour mode only
+    )
+
+Both limits must fall within the denominator's coverage shown in the table
+above.  A ``ValueError`` is raised if they do not.
+
+You can also coarsen the bin size in steps of 0.5 mag using ``h_bin_size``
+and ``gh_bin_size`` (e.g. ``h_bin_size=1.0`` gives 1-mag bins).  The
+minimum bin size is always 0.5 mag (the native denominator resolution).
 
 Bundled file
 -----------
