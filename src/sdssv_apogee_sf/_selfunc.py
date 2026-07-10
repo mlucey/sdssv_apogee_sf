@@ -1,0 +1,592 @@
+"""
+Core selection function class for SDSS-V APOGEE surveys.
+"""
+from __future__ import annotations
+
+import importlib.resources
+import warnings
+from pathlib import Path
+from typing import Union
+
+import healpy as hp
+import numpy as np
+
+# Native denominator resolution — bin edges are multiples of this step.
+_NATIVE_STEP = 0.5
+
+# Full denominator magnitude ranges (set when the denominator is built).
+H_BINS_DEFAULT  = np.arange(-3.0, 18.01, _NATIVE_STEP)
+GH_BINS_DEFAULT = np.arange(-2.5, 14.51, _NATIVE_STEP)
+
+# Gaia DR3 faint detection limit used when placing no-Gaia 2MASS stars in GH bins.
+GAIA_G_LIMIT = 21.0
+
+
+def _coarsen(hist: np.ndarray, bins: np.ndarray, factor: int,
+             axis: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Coarsen *hist* along *axis* by summing *factor* adjacent bins.
+
+    Trailing bins that don't fill a complete group are dropped.
+
+    Returns
+    -------
+    hist_out : ndarray — coarsened histogram
+    bins_out : ndarray — new bin edges
+    """
+    n = hist.shape[axis]
+    n_keep = (n // factor) * factor
+    hist = np.take(hist, range(n_keep), axis=axis)
+    shape = list(hist.shape)
+    shape[axis] = n_keep // factor
+    shape.insert(axis + 1, factor)
+    hist_out = hist.reshape(shape).sum(axis=axis + 1)
+    bins_out = bins[::factor][:n_keep // factor + 1]
+    return hist_out, bins_out
+
+
+def _restrict_range(hist: np.ndarray, bins: np.ndarray,
+                    lo: float, hi: float, axis: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Slice *hist* along *axis* to the bins that overlap [lo, hi].
+
+    Returns the sliced histogram and the corresponding bin edges.
+    """
+    i_start = max(0, np.searchsorted(bins[1:], lo, side='left'))
+    i_end   = min(len(bins) - 1, np.searchsorted(bins[:-1], hi, side='right'))
+    slc = [slice(None)] * hist.ndim
+    slc[axis] = slice(i_start, i_end)
+    return hist[tuple(slc)], bins[i_start:i_end + 1]
+
+
+def _degrade_sum(arr1d: np.ndarray, nside_in: int, nside_out: int) -> np.ndarray:
+    """Degrade a 1-D HEALPix map from nside_in to nside_out by summing child pixels."""
+    n_children = (nside_in // nside_out) ** 2
+    return hp.ud_grade(arr1d, nside_out) * n_children
+
+
+def _build_adaptive(
+    hist_all: np.ndarray,
+    hist_obs: np.ndarray,
+    nside: int,
+    min_count: int = 5,
+    nside_min: int = 8,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute SF with adaptive HEALPix coarsening.
+
+    Starting at *nside*, each (H-bin, pixel) cell — or (H-bin, pixel, GH-bin)
+    cell in colour mode — that has fewer than *min_count* 2MASS sources is
+    deferred to the next coarser resolution via hp.ud_grade (which correctly
+    sums ALL fine pixels, not just uncovered ones).  This repeats down to
+    *nside_min*.  Cells still uncovered after that remain NaN.
+
+    Parameters
+    ----------
+    hist_all : (n_H, n_pix) or (n_H, n_pix, n_GH) — denominator counts at nside
+    hist_obs : same shape — numerator counts
+    nside    : int — fine resolution (RING ordering)
+    min_count: int
+    nside_min: int
+
+    Returns
+    -------
+    sf       : same shape as hist_all — SF values in [0,1] or NaN
+    nside_map: (n_H, n_pix) — effective nside used per (H-bin, pixel)
+    """
+    use_color = hist_all.ndim == 3
+    if use_color:
+        n_h, npix_max, n_gh = hist_all.shape
+    else:
+        n_h, npix_max = hist_all.shape
+
+    sf_out    = np.full(hist_all.shape, np.nan, dtype=float)
+    nside_map = np.zeros((n_h, npix_max), dtype=np.int32)
+    covered   = (np.zeros((n_h, npix_max, n_gh), dtype=bool) if use_color
+                 else np.zeros((n_h, npix_max), dtype=bool))
+
+    ns = nside
+    while ns >= max(nside_min, 1):
+        npix_ns = hp.nside2npix(ns)
+
+        if ns == nside:
+            ha, ht = hist_all, hist_obs
+        else:
+            if use_color:
+                ha = np.zeros((n_h, npix_ns, n_gh))
+                ht = np.zeros((n_h, npix_ns, n_gh))
+                for hi in range(n_h):
+                    for gi in range(n_gh):
+                        ha[hi, :, gi] = _degrade_sum(hist_all[hi, :, gi], nside, ns)
+                        ht[hi, :, gi] = _degrade_sum(hist_obs[hi, :, gi], nside, ns)
+            else:
+                ha = np.stack([_degrade_sum(hist_all[hi], nside, ns) for hi in range(n_h)])
+                ht = np.stack([_degrade_sum(hist_obs[hi], nside, ns) for hi in range(n_h)])
+
+        good_at_ns = ha >= max(min_count, 1)
+
+        # Broadcast coarse mask back to fine grid
+        if ns < nside:
+            if use_color:
+                good_at_max = np.zeros((n_h, npix_max, n_gh), dtype=bool)
+                for hi in range(n_h):
+                    for gi in range(n_gh):
+                        good_at_max[hi, :, gi] = (
+                            hp.ud_grade(good_at_ns[hi, :, gi].astype(float), nside) > 0.5
+                        )
+            else:
+                good_at_max = np.zeros((n_h, npix_max), dtype=bool)
+                for hi in range(n_h):
+                    good_at_max[hi] = (
+                        hp.ud_grade(good_at_ns[hi].astype(float), nside) > 0.5
+                    )
+        else:
+            good_at_max = good_at_ns
+
+        new_covered = good_at_max & ~covered
+
+        if new_covered.any():
+            sf = (ht + 1.0) / (ha + 2.0)
+
+            # Upgrade coarse SF values back to fine grid
+            if ns < nside:
+                if use_color:
+                    sf_up = np.zeros((n_h, npix_max, n_gh))
+                    for hi in range(n_h):
+                        for gi in range(n_gh):
+                            sf_up[hi, :, gi] = hp.ud_grade(sf[hi, :, gi], nside)
+                else:
+                    sf_up = np.stack([hp.ud_grade(sf[hi], nside) for hi in range(n_h)])
+            else:
+                sf_up = sf
+
+            sf_out[new_covered] = sf_up[new_covered]
+
+            newly_touched = new_covered.any(axis=2) if use_color else new_covered
+            nside_map[newly_touched] = ns
+            covered |= new_covered
+
+        if covered.all():
+            break
+
+        ns //= 2
+
+    return sf_out, nside_map
+
+
+def _pix_for_coords(coords, nside: int) -> np.ndarray:
+    """Return RING HEALPix pixel indices (equatorial) for an astropy SkyCoord."""
+    ra  = np.atleast_1d(np.asarray(coords.icrs.ra.deg,  dtype=float))
+    dec = np.atleast_1d(np.asarray(coords.icrs.dec.deg, dtype=float))
+    theta = np.radians(90.0 - dec)
+    phi   = np.radians(ra)
+    return hp.ang2pix(nside, theta, phi, nest=False)
+
+
+class APOGEESelectionFunction:
+    """
+    SDSS-V APOGEE selection function computed against a pre-built 2MASS denominator.
+
+    The denominator (2MASS PSC counts binned by HEALPix pixel + H magnitude, and
+    optionally G-H colour) can be downloaded automatically from Zenodo or supplied
+    locally.
+
+    Typical usage::
+
+        from sdssv_apogee_sf import APOGEESelectionFunction
+        import astropy.table as tbl
+
+        observed = tbl.Table.read("my_apogee_stars.fits")
+
+        sf = APOGEESelectionFunction.from_observed(
+            observed,
+            h_col="h_m",
+            g_col="g_mag",   # optional; enables G-H colour axis
+        )
+
+        import astropy.coordinates as coord
+        c = coord.SkyCoord(ra=observed["ra"], dec=observed["dec"], unit="deg")
+        completeness = sf.query(c, H=observed["h_m"], GH=observed["g_mag"] - observed["h_m"])
+    """
+
+    def __init__(
+        self,
+        selfunc: np.ndarray,
+        hist_all: np.ndarray,
+        H_BINS: np.ndarray,
+        nside: int,
+        GH_BINS: np.ndarray | None = None,
+        nside_map: np.ndarray | None = None,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        selfunc   : (n_H, n_pix) or (n_H, n_pix, n_GH) — SF values in [0, 1] or NaN
+        hist_all  : same shape — 2MASS denominator counts
+        H_BINS    : (n_H + 1,) — H-magnitude bin edges
+        nside     : int — HEALPix nside (RING ordering)
+        GH_BINS   : (n_GH + 1,) or None — G-H bin edges if colour axis is used
+        nside_map : (n_pix,) or None — effective nside per pixel after adaptive coarsening
+        """
+        self._selfunc  = selfunc
+        self._hist_all = hist_all
+        self._H_BINS   = H_BINS
+        self._GH_BINS  = GH_BINS
+        self._nside    = nside
+        self._nside_map = nside_map
+
+    # ── Properties ────────────────────────────────────────────────────────────
+
+    @property
+    def nside(self) -> int:
+        return self._nside
+
+    @property
+    def H_BINS(self) -> np.ndarray:
+        return self._H_BINS
+
+    @property
+    def GH_BINS(self) -> np.ndarray | None:
+        return self._GH_BINS
+
+    @property
+    def use_color(self) -> bool:
+        return self._GH_BINS is not None
+
+    # ── Constructors ──────────────────────────────────────────────────────────
+
+    @classmethod
+    def from_observed(
+        cls,
+        observed,
+        ra_col: str = "ra",
+        dec_col: str = "dec",
+        h_col: str = "h_m",
+        g_col: str | None = None,
+        nside: int = 64,
+        min_count: int = 5,
+        nside_min: int = 8,
+        h_bin_size: float | None = None,
+        gh_bin_size: float | None = None,
+        denominator_path: str | Path | None = None,
+    ) -> "APOGEESelectionFunction":
+        """
+        Build a selection function from a table of observed APOGEE stars.
+
+        Parameters
+        ----------
+        observed : astropy Table, pandas DataFrame, or any dict-like with column access.
+        ra_col, dec_col : column names for right ascension and declination (degrees).
+        h_col : column name for H-band magnitude.
+        g_col : column name for Gaia G magnitude.  When provided, a colour (H × G−H)
+            selection function is computed.  Stars missing G are excluded from the
+            colour numerator but are still used in H-only mode.
+        nside : HEALPix nside for the sky pixelisation (default 64).
+        min_count : minimum 2MASS sources per adaptive cell before merging to a
+            coarser resolution (default 5).
+        nside_min : coarsest HEALPix resolution allowed by adaptive binning (default 8).
+        h_bin_size : H-magnitude bin width in magnitudes.  Must be a multiple of the
+            denominator's native 0.5-mag step (i.e. 0.5, 1.0, 1.5, …).
+            Defaults to the denominator's native resolution (0.5 mag).
+        gh_bin_size : G−H bin width, same rules as *h_bin_size*.
+            Only used in colour mode.
+        denominator_path : path to the pre-computed 2MASS denominator .npz.
+            When *None* the file is auto-downloaded to :func:`get_datadir`.
+
+        Returns
+        -------
+        APOGEESelectionFunction
+
+        Warns
+        -----
+        UserWarning
+            If any observed stars fall outside the denominator's magnitude range.
+            Those stars are excluded from the selection function.
+
+        Notes
+        -----
+        The magnitude range is automatically restricted to the range present in
+        *observed*.  Stars outside the denominator's full range are warned about
+        and dropped.
+        """
+        use_color = g_col is not None
+
+        # ── Load denominator — bins and nside come from the file ──────────────
+        denom = cls._load_denominator(denominator_path)
+        H_BINS_denom  = denom["H_BINS"]
+        GH_BINS_denom = denom["GH_BINS"]
+        nside_denom   = int(denom["nside"])
+        hist_all_full = denom["hist_all"]   # (n_H, n_pix, n_GH) at full range + native res
+
+        if nside_denom != nside:
+            raise ValueError(
+                f"Denominator file has nside={nside_denom}, but nside={nside} was requested."
+            )
+
+        # ── Validate bin sizes ────────────────────────────────────────────────
+        def _check_bin_size(size, name):
+            if size is None:
+                return 1  # factor of 1 = no coarsening
+            factor = round(size / _NATIVE_STEP)
+            if abs(factor * _NATIVE_STEP - size) > 1e-9 or factor < 1:
+                raise ValueError(
+                    f"{name}={size} is not a positive multiple of the native "
+                    f"step {_NATIVE_STEP}. Use 0.5, 1.0, 1.5, 2.0, …"
+                )
+            return factor
+
+        h_factor  = _check_bin_size(h_bin_size,  "h_bin_size")
+        gh_factor = _check_bin_size(gh_bin_size, "gh_bin_size")
+
+        # ── Extract magnitudes and warn about out-of-range stars ──────────────
+        ra  = np.asarray(observed[ra_col],  dtype=float)
+        dec = np.asarray(observed[dec_col], dtype=float)
+        h   = np.asarray(observed[h_col],   dtype=float)
+        g   = np.asarray(observed[g_col],   dtype=float) if use_color else None
+
+        h_denom_lo, h_denom_hi = H_BINS_denom[0], H_BINS_denom[-1]
+        n_below_h = int(np.sum(h < h_denom_lo))
+        n_above_h = int(np.sum(h >= h_denom_hi))
+        if n_below_h:
+            warnings.warn(
+                f"{n_below_h} star(s) have H < {h_denom_lo:.2f} (below denominator range) "
+                f"and will be excluded.",
+                UserWarning, stacklevel=2,
+            )
+        if n_above_h:
+            warnings.warn(
+                f"{n_above_h} star(s) have H >= {h_denom_hi:.2f} (above denominator range) "
+                f"and will be excluded.",
+                UserWarning, stacklevel=2,
+            )
+
+        if use_color:
+            gh = g - h
+            gh_denom_lo, gh_denom_hi = GH_BINS_denom[0], GH_BINS_denom[-1]
+            both_valid = np.isfinite(h) & np.isfinite(gh)
+            n_below_gh = int(np.sum(both_valid & (gh < gh_denom_lo)))
+            n_above_gh = int(np.sum(both_valid & (gh >= gh_denom_hi)))
+            if n_below_gh:
+                warnings.warn(
+                    f"{n_below_gh} star(s) have G−H < {gh_denom_lo:.2f} (below denominator "
+                    f"range) and will be excluded from the colour numerator.",
+                    UserWarning, stacklevel=2,
+                )
+            if n_above_gh:
+                warnings.warn(
+                    f"{n_above_gh} star(s) have G−H >= {gh_denom_hi:.2f} (above denominator "
+                    f"range) and will be excluded from the colour numerator.",
+                    UserWarning, stacklevel=2,
+                )
+
+        # ── Restrict denominator to data range ────────────────────────────────
+        h_valid = h[np.isfinite(h)]
+        h_lo = float(np.floor(h_valid.min() / _NATIVE_STEP) * _NATIVE_STEP) if len(h_valid) else h_denom_lo
+        h_hi = float(np.ceil( h_valid.max() / _NATIVE_STEP) * _NATIVE_STEP) if len(h_valid) else h_denom_hi
+        h_lo = max(h_lo, h_denom_lo)
+        h_hi = min(h_hi, h_denom_hi)
+
+        hist_all_full, H_BINS = _restrict_range(hist_all_full, H_BINS_denom, h_lo, h_hi, axis=0)
+
+        if use_color:
+            gh_arr = gh[np.isfinite(gh) & np.isfinite(h)]
+            gh_lo = float(np.floor(gh_arr.min() / _NATIVE_STEP) * _NATIVE_STEP) if len(gh_arr) else GH_BINS_denom[0]
+            gh_hi = float(np.ceil( gh_arr.max() / _NATIVE_STEP) * _NATIVE_STEP) if len(gh_arr) else GH_BINS_denom[-1]
+            gh_lo = max(gh_lo, GH_BINS_denom[0])
+            gh_hi = min(gh_hi, GH_BINS_denom[-1])
+            hist_all_full, GH_BINS = _restrict_range(hist_all_full, GH_BINS_denom, gh_lo, gh_hi, axis=2)
+        else:
+            GH_BINS = GH_BINS_denom
+
+        # ── Coarsen bins if requested ─────────────────────────────────────────
+        if h_factor > 1:
+            hist_all_full, H_BINS = _coarsen(hist_all_full, H_BINS, h_factor, axis=0)
+        if use_color and gh_factor > 1:
+            hist_all_full, GH_BINS = _coarsen(hist_all_full, GH_BINS, gh_factor, axis=2)
+
+        # ── Build per-mode denominator ────────────────────────────────────────
+        if use_color:
+            hist_all = hist_all_full
+        else:
+            hist_all = hist_all_full.sum(axis=2)
+
+        # ── Bin observed stars into numerator ─────────────────────────────────
+        hist_obs = cls._bin_observed(
+            ra, dec, h, g,
+            nside=nside, H_BINS=H_BINS, GH_BINS=GH_BINS if use_color else None,
+        )
+
+        # ── Adaptive SF ───────────────────────────────────────────────────────
+        sf, nside_map = _build_adaptive(
+            hist_all, hist_obs, nside=nside,
+            min_count=min_count, nside_min=nside_min,
+        )
+
+        return cls(
+            selfunc=sf,
+            hist_all=hist_all,
+            H_BINS=H_BINS,
+            nside=nside,
+            GH_BINS=GH_BINS if use_color else None,
+            nside_map=nside_map,
+        )
+
+    @classmethod
+    def _load_denominator(cls, path: str | Path | None) -> dict:
+        """
+        Load the pre-computed 2MASS colour denominator npz.
+
+        The file must contain:
+
+        - ``hist_all`` — shape ``(n_H, n_pix, n_GH)``, 2MASS counts per bin
+        - ``H_BINS`` — H-magnitude bin edges
+        - ``GH_BINS`` — G−H bin edges
+        - ``nside`` — HEALPix resolution
+
+        Bin edges and nside are read from the file; callers do not need to
+        specify them separately.
+        """
+        if path is None:
+            pkg_data = importlib.resources.files("sdssv_apogee_sf") / "data" / "twomass_denominator.npz"
+            with importlib.resources.as_file(pkg_data) as p:
+                path = p
+
+        d = np.load(path, allow_pickle=False)
+
+        for key in ("hist_all", "H_BINS", "GH_BINS", "nside"):
+            if key not in d:
+                raise ValueError(
+                    f"Denominator file is missing key '{key}'. "
+                    "Re-generate it with: python gg_selfunc_healpix.py --use-color"
+                )
+        return dict(d)
+
+    @staticmethod
+    def _bin_observed(
+        ra: np.ndarray,
+        dec: np.ndarray,
+        h: np.ndarray,
+        g: np.ndarray | None,
+        nside: int,
+        H_BINS: np.ndarray,
+        GH_BINS: np.ndarray | None,
+    ) -> np.ndarray:
+        """
+        Bin observed stars into a HEALPix + H (+ G-H) histogram.
+
+        Returns
+        -------
+        hist : (n_H, n_pix) or (n_H, n_pix, n_GH)
+        """
+        n_pix = hp.nside2npix(nside)
+        n_H   = len(H_BINS) - 1
+
+        theta = np.radians(90.0 - dec)
+        phi   = np.radians(ra)
+        pix   = hp.ang2pix(nside, theta, phi, nest=False)
+
+        valid = np.isfinite(h)
+        h_idx = np.searchsorted(H_BINS[1:], h[valid])
+        h_idx = np.clip(h_idx, 0, n_H - 1)
+        pix_v = pix[valid]
+
+        if GH_BINS is None:
+            hist = np.zeros((n_H, n_pix), dtype=np.int32)
+            for hi in range(n_H):
+                sel = pix_v[h_idx == hi]
+                np.add.at(hist[hi], sel, 1)
+            return hist
+
+        n_GH = len(GH_BINS) - 1
+        both    = np.isfinite(h) & np.isfinite(g)
+        pix_b   = hp.ang2pix(nside, np.radians(90.0 - dec[both]),
+                              np.radians(ra[both]), nest=False)
+        h_b     = h[both]
+        gh_b    = g[both] - h[both]
+        h_idx_b = np.clip(np.searchsorted(H_BINS[1:], h_b), 0, n_H - 1)
+        gh_idx  = np.clip(np.searchsorted(GH_BINS[1:], gh_b), 0, n_GH - 1)
+
+        hist = np.zeros((n_H, n_pix, n_GH), dtype=np.int32)
+        for hi in range(n_H):
+            sel_h = h_idx_b == hi
+            for gi in range(n_GH):
+                sel = pix_b[sel_h & (gh_idx == gi)]
+                np.add.at(hist[hi, :, gi], sel, 1)
+        return hist
+
+    # ── Query ─────────────────────────────────────────────────────────────────
+
+    def query(
+        self,
+        coords,
+        H: Union[float, np.ndarray],
+        GH: Union[float, np.ndarray, None] = None,
+    ) -> np.ndarray:
+        """
+        Evaluate the selection function at sky coordinates and magnitude(s).
+
+        Parameters
+        ----------
+        coords : astropy.coordinates.SkyCoord
+            Sky position(s) of the query stars.
+        H      : float or array-like
+            H-band magnitude(s).
+        GH     : float or array-like, optional
+            G-H colour(s). Required when the SF was built with ``g_col``.
+
+        Returns
+        -------
+        p : ndarray, shape (N,) or scalar
+            Selection function value(s) in [0, 1].  NaN for out-of-range inputs.
+        """
+        scalar = np.ndim(H) == 0
+        pix    = _pix_for_coords(coords, self._nside)
+        H      = np.atleast_1d(np.asarray(H, dtype=float))
+        n_H    = len(self._H_BINS) - 1
+
+        h_idx  = np.clip(np.searchsorted(self._H_BINS[1:], H), 0, n_H - 1)
+        out_h  = (H < self._H_BINS[0]) | (H >= self._H_BINS[-1])
+
+        if not self.use_color:
+            result = self._selfunc[h_idx, pix]
+        else:
+            if GH is None:
+                raise ValueError("GH must be provided for a colour selection function.")
+            GH    = np.atleast_1d(np.asarray(GH, dtype=float))
+            n_GH  = len(self._GH_BINS) - 1
+            gh_idx = np.clip(np.searchsorted(self._GH_BINS[1:], GH), 0, n_GH - 1)
+            result = self._selfunc[h_idx, pix, gh_idx]
+
+        result = result.copy()
+        result[out_h] = np.nan
+        return float(result[0]) if scalar else result
+
+    # ── Persistence ───────────────────────────────────────────────────────────
+
+    def write(self, path: str | Path) -> None:
+        """Save to a compressed .npz file."""
+        path = Path(path)
+        arrays: dict[str, np.ndarray] = {
+            "selfunc":  self._selfunc,
+            "hist_all": self._hist_all,
+            "H_BINS":   self._H_BINS,
+            "nside":    np.array(self._nside),
+        }
+        if self._GH_BINS is not None:
+            arrays["GH_BINS"] = self._GH_BINS
+        if self._nside_map is not None:
+            arrays["nside_map"] = self._nside_map
+        np.savez_compressed(path, **arrays)
+
+    @classmethod
+    def read(cls, path: str | Path) -> "APOGEESelectionFunction":
+        """Load from a .npz file written by :meth:`write`."""
+        d = np.load(path, allow_pickle=False)
+        return cls(
+            selfunc   = d["selfunc"],
+            hist_all  = d["hist_all"],
+            H_BINS    = d["H_BINS"],
+            nside     = int(d["nside"]),
+            GH_BINS   = d["GH_BINS"]   if "GH_BINS"   in d else None,
+            nside_map = d["nside_map"] if "nside_map" in d else None,
+        )
