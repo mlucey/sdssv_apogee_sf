@@ -21,6 +21,15 @@ HEALPix nside 64 (pixel size ≈ 55 arcmin) —
 Stars in your observed catalogue that fall outside these ranges will trigger a
 ``UserWarning`` and be excluded from the selection function.
 
+.. warning::
+
+   The 2MASS PSC is not complete at all sky positions for H > 12.  In
+   crowded regions such as the Galactic bulge, source confusion causes the
+   catalogue to become incomplete at faint magnitudes, which means the
+   denominator undercounts 2MASS stars there and the selection function will
+   be **overestimated**.  A ``UserWarning`` is issued automatically when your
+   sample contains stars with H > 12.
+
 Magnitude range and binning
 ---------------------------
 

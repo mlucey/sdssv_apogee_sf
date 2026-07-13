@@ -367,6 +367,15 @@ class APOGEESelectionFunction:
                 UserWarning, stacklevel=2,
             )
 
+        h_denom_hi_warn = 12.0
+        if np.any(h[np.isfinite(h)] > h_denom_hi_warn):
+            warnings.warn(
+                f"Some stars have H > {h_denom_hi_warn:.0f}. At these faint magnitudes "
+                "the 2MASS PSC may be incomplete in crowded regions (e.g. the Galactic "
+                "bulge), which can cause the selection function to be overestimated there.",
+                UserWarning, stacklevel=2,
+            )
+
         if use_color:
             gh = g - h
             gh_denom_lo, gh_denom_hi = GH_BINS_denom[0], GH_BINS_denom[-1]
