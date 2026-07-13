@@ -213,6 +213,7 @@ class APOGEESelectionFunction:
         self,
         selfunc: np.ndarray,
         hist_all: np.ndarray,
+        hist_obs: np.ndarray,
         H_BINS: np.ndarray,
         nside: int,
         GH_BINS: np.ndarray | None = None,
@@ -223,16 +224,18 @@ class APOGEESelectionFunction:
         ----------
         selfunc   : (n_H, n_pix) or (n_H, n_pix, n_GH) — SF values in [0, 1] or NaN
         hist_all  : same shape — 2MASS denominator counts
+        hist_obs  : same shape — observed star counts (numerator)
         H_BINS    : (n_H + 1,) — H-magnitude bin edges
         nside     : int — HEALPix nside (RING ordering)
         GH_BINS   : (n_GH + 1,) or None — G-H bin edges if colour axis is used
         nside_map : (n_pix,) or None — effective nside per pixel after adaptive coarsening
         """
-        self._selfunc  = selfunc
-        self._hist_all = hist_all
-        self._H_BINS   = H_BINS
-        self._GH_BINS  = GH_BINS
-        self._nside    = nside
+        self._selfunc   = selfunc
+        self._hist_all  = hist_all
+        self._hist_obs  = hist_obs
+        self._H_BINS    = H_BINS
+        self._GH_BINS   = GH_BINS
+        self._nside     = nside
         self._nside_map = nside_map
 
     # ── Properties ────────────────────────────────────────────────────────────
@@ -457,6 +460,7 @@ class APOGEESelectionFunction:
         return cls(
             selfunc=sf,
             hist_all=hist_all,
+            hist_obs=hist_obs,
             H_BINS=H_BINS,
             nside=nside,
             GH_BINS=GH_BINS if use_color else None,
@@ -601,6 +605,7 @@ class APOGEESelectionFunction:
         arrays: dict[str, np.ndarray] = {
             "selfunc":  self._selfunc,
             "hist_all": self._hist_all,
+            "hist_obs": self._hist_obs,
             "H_BINS":   self._H_BINS,
             "nside":    np.array(self._nside),
         }
@@ -617,6 +622,7 @@ class APOGEESelectionFunction:
         return cls(
             selfunc   = d["selfunc"],
             hist_all  = d["hist_all"],
+            hist_obs  = d["hist_obs"],
             H_BINS    = d["H_BINS"],
             nside     = int(d["nside"]),
             GH_BINS   = d["GH_BINS"]   if "GH_BINS"   in d else None,
