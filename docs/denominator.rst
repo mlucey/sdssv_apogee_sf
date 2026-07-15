@@ -65,11 +65,22 @@ File format
 
 The ``.npz`` file contains:
 
-===========  =====================================  ===========
-Key          Shape                                  Description
-===========  =====================================  ===========
-``hist_all`` ``(n_H, n_pix, n_GH)``                2MASS source counts
-``H_BINS``   ``(n_H + 1,)``                        H-magnitude bin edges
-``GH_BINS``  ``(n_GH + 1,)``                       G−H bin edges
-``nside``    scalar                                 HEALPix nside
-===========  =====================================  ===========
+.. list-table::
+   :header-rows: 1
+   :widths: auto
+
+   * - Key
+     - Shape
+     - Description
+   * - ``hist_all``
+     - ``(n_H, n_pix, n_GH)``
+     - 2MASS source counts
+   * - ``H_BINS``
+     - ``(n_H + 1,)``
+     - H-magnitude bin edges
+   * - ``GH_BINS``
+     - ``(n_GH + 1,)``
+     - G−H bin edges
+   * - ``nside``
+     - scalar
+     - HEALPix nside
