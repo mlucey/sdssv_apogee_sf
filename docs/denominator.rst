@@ -60,19 +60,6 @@ Bundled file
 automatically when ``denominator_path=None`` (the default).  No additional
 setup is required.
 
-Regenerating the denominator
------------------------------
-
-If you need to rebuild the denominator (e.g. with a different nside or
-magnitude range), you will need access to the SDSS-V database (Utah cluster):
-
-.. code-block:: bash
-
-   python gg_selfunc_healpix.py --use-color
-
-This writes ``twomass_denominator.npz`` in the current directory.  Pass its
-path via ``denominator_path=`` to use it instead of the bundled file.
-
 File format
 -----------
 
