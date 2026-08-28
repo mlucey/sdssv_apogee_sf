@@ -585,16 +585,19 @@ class APOGEESelectionFunction:
 
         if not self.use_color:
             result = self._selfunc[h_idx, pix]
+            out_of_range = out_h
         else:
             if GH is None:
                 raise ValueError("GH must be provided for a colour selection function.")
             GH    = np.atleast_1d(np.asarray(GH, dtype=float))
             n_GH  = len(self._GH_BINS) - 1
             gh_idx = np.clip(np.searchsorted(self._GH_BINS[1:], GH), 0, n_GH - 1)
+            out_gh = (GH < self._GH_BINS[0]) | (GH >= self._GH_BINS[-1])
             result = self._selfunc[h_idx, pix, gh_idx]
+            out_of_range = out_h | out_gh
 
         result = result.copy()
-        result[out_h] = np.nan
+        result[out_of_range] = np.nan
         return float(result[0]) if scalar else result
 
     # ── Persistence ───────────────────────────────────────────────────────────
