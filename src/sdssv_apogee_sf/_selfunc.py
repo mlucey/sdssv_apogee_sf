@@ -53,7 +53,7 @@ def _restrict_range(hist: np.ndarray, bins: np.ndarray,
     Returns the sliced histogram and the corresponding bin edges.
     """
     i_start = max(0, np.searchsorted(bins[1:], lo, side='left'))
-    i_end   = min(len(bins) - 1, np.searchsorted(bins[:-1], hi, side='right'))
+    i_end   = min(len(bins) - 1, np.searchsorted(bins[:-1], hi, side='left'))
     slc = [slice(None)] * hist.ndim
     slc[axis] = slice(i_start, i_end)
     return hist[tuple(slc)], bins[i_start:i_end + 1]
