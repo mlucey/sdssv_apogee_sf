@@ -71,6 +71,7 @@ def _build_adaptive(
     nside: int,
     min_count: int = 5,
     nside_min: int = 8,
+    use_prior: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute SF with adaptive HEALPix coarsening.
@@ -88,6 +89,10 @@ def _build_adaptive(
     nside    : int — fine resolution (RING ordering)
     min_count: int
     nside_min: int
+    use_prior: bool — if True (default), use the Bayesian Beta(1,1) estimate
+        ``(N_obs + 1) / (N_2MASS + 2)``.  If False, use the raw MLE ratio
+        ``N_obs / N_2MASS`` (undefined cells, where the coarsened denominator
+        is still zero, stay NaN).
 
     Returns
     -------
@@ -146,7 +151,11 @@ def _build_adaptive(
         new_covered = good_at_max & ~covered
 
         if new_covered.any():
-            sf = (ht + 1.0) / (ha + 2.0)
+            if use_prior:
+                sf = (ht + 1.0) / (ha + 2.0)
+            else:
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    sf = np.where(ha > 0, ht / ha, np.nan)
 
             # Upgrade coarse SF values back to fine grid
             if ns < nside:
@@ -218,6 +227,7 @@ class APOGEESelectionFunction:
         nside: int,
         GH_BINS: np.ndarray | None = None,
         nside_map: np.ndarray | None = None,
+        use_prior: bool = True,
     ) -> None:
         """
         Parameters
@@ -229,6 +239,9 @@ class APOGEESelectionFunction:
         nside     : int — HEALPix nside (RING ordering)
         GH_BINS   : (n_GH + 1,) or None — G-H bin edges if colour axis is used
         nside_map : (n_pix,) or None — effective nside per pixel after adaptive coarsening
+        use_prior : bool — whether *selfunc* was computed with the Bayesian
+            Beta(1,1) prior (``True``) or as the raw MLE ratio (``False``).
+            Recorded for provenance; does not affect querying.
         """
         self._selfunc   = selfunc
         self._hist_all  = hist_all
@@ -237,6 +250,7 @@ class APOGEESelectionFunction:
         self._GH_BINS   = GH_BINS
         self._nside     = nside
         self._nside_map = nside_map
+        self._use_prior = use_prior
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -256,6 +270,11 @@ class APOGEESelectionFunction:
     def use_color(self) -> bool:
         return self._GH_BINS is not None
 
+    @property
+    def use_prior(self) -> bool:
+        """Whether the SF was computed with the Bayesian Beta(1,1) prior."""
+        return self._use_prior
+
     # ── Constructors ──────────────────────────────────────────────────────────
 
     @classmethod
@@ -269,6 +288,7 @@ class APOGEESelectionFunction:
         nside: int = 64,
         min_count: int = 5,
         nside_min: int = 8,
+        use_prior: bool = True,
         h_bin_size: float | None = None,
         gh_bin_size: float | None = None,
         h_range: tuple[float, float] | None = None,
@@ -290,6 +310,11 @@ class APOGEESelectionFunction:
         min_count : minimum 2MASS sources per adaptive cell before merging to a
             coarser resolution (default 5).
         nside_min : coarsest HEALPix resolution allowed by adaptive binning (default 8).
+        use_prior : if True (default), compute the SF with a Bayesian Beta(1,1)
+            prior, ``S = (N_observed + 1) / (N_2MASS + 2)``.  If False, compute
+            the raw MLE ratio ``S = N_observed / N_2MASS`` instead — cells are
+            still merged to coarser resolution via *min_count* / *nside_min*,
+            but the SF value itself is not shrunk toward 0.5.
         h_bin_size : H-magnitude bin width in magnitudes.  Must be a positive multiple
             of the denominator's native 0.5-mag step (i.e. 0.5, 1.0, 1.5, …).
             Defaults to the native resolution (0.5 mag).
@@ -454,7 +479,7 @@ class APOGEESelectionFunction:
         # ── Adaptive SF ───────────────────────────────────────────────────────
         sf, nside_map = _build_adaptive(
             hist_all, hist_obs, nside=nside,
-            min_count=min_count, nside_min=nside_min,
+            min_count=min_count, nside_min=nside_min, use_prior=use_prior,
         )
 
         return cls(
@@ -465,6 +490,7 @@ class APOGEESelectionFunction:
             nside=nside,
             GH_BINS=GH_BINS if use_color else None,
             nside_map=nside_map,
+            use_prior=use_prior,
         )
 
     @classmethod
@@ -611,6 +637,7 @@ class APOGEESelectionFunction:
             "hist_obs": self._hist_obs,
             "H_BINS":   self._H_BINS,
             "nside":    np.array(self._nside),
+            "use_prior": np.array(self._use_prior),
         }
         if self._GH_BINS is not None:
             arrays["GH_BINS"] = self._GH_BINS
@@ -630,4 +657,5 @@ class APOGEESelectionFunction:
             nside     = int(d["nside"]),
             GH_BINS   = d["GH_BINS"]   if "GH_BINS"   in d else None,
             nside_map = d["nside_map"] if "nside_map" in d else None,
+            use_prior = bool(d["use_prior"]) if "use_prior" in d else True,
         )
