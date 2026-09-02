@@ -62,7 +62,11 @@ def _restrict_range(hist: np.ndarray, bins: np.ndarray,
 def _degrade_sum(arr1d: np.ndarray, nside_in: int, nside_out: int) -> np.ndarray:
     """Degrade a 1-D HEALPix map from nside_in to nside_out by summing child pixels."""
     n_children = (nside_in // nside_out) ** 2
-    return hp.ud_grade(arr1d, nside_out) * n_children
+    # hp.ud_grade preserves input dtype: for integer maps (e.g. observed-star
+    # counts) it truncates the intermediate per-pixel mean, silently zeroing
+    # out sparse counts that don't divide evenly among the children before
+    # they get multiplied back up. Cast to float first so the mean is exact.
+    return hp.ud_grade(arr1d.astype(float), nside_out) * n_children
 
 
 def _build_adaptive(
