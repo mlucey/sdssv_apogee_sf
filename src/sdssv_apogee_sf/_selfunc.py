@@ -552,7 +552,10 @@ class APOGEESelectionFunction:
         pix   = hp.ang2pix(nside, theta, phi, nest=False)
 
         valid = np.isfinite(h)
-        h_idx = np.searchsorted(H_BINS[1:], h[valid])
+        # side='right': bins are left-closed [lo, hi), so a value exactly on a
+        # native 0.5-mag edge falls in the bin starting there, matching the
+        # SQL denominator's floor()-based binning in gg_selfunc_healpix.py.
+        h_idx = np.searchsorted(H_BINS[1:], h[valid], side='right')
         h_idx = np.clip(h_idx, 0, n_H - 1)
         pix_v = pix[valid]
 
@@ -569,8 +572,8 @@ class APOGEESelectionFunction:
                               np.radians(ra[both]), nest=False)
         h_b     = h[both]
         gh_b    = g[both] - h[both]
-        h_idx_b = np.clip(np.searchsorted(H_BINS[1:], h_b), 0, n_H - 1)
-        gh_idx  = np.clip(np.searchsorted(GH_BINS[1:], gh_b), 0, n_GH - 1)
+        h_idx_b = np.clip(np.searchsorted(H_BINS[1:], h_b, side='right'), 0, n_H - 1)
+        gh_idx  = np.clip(np.searchsorted(GH_BINS[1:], gh_b, side='right'), 0, n_GH - 1)
 
         hist = np.zeros((n_H, n_pix, n_GH), dtype=np.int32)
         for hi in range(n_H):
@@ -610,7 +613,8 @@ class APOGEESelectionFunction:
         H      = np.atleast_1d(np.asarray(H, dtype=float))
         n_H    = len(self._H_BINS) - 1
 
-        h_idx  = np.clip(np.searchsorted(self._H_BINS[1:], H), 0, n_H - 1)
+        # side='right': bins are left-closed [lo, hi) -- see _bin_observed.
+        h_idx  = np.clip(np.searchsorted(self._H_BINS[1:], H, side='right'), 0, n_H - 1)
         out_h  = (H < self._H_BINS[0]) | (H >= self._H_BINS[-1])
 
         if not self.use_color:
@@ -621,7 +625,7 @@ class APOGEESelectionFunction:
                 raise ValueError("GH must be provided for a colour selection function.")
             GH    = np.atleast_1d(np.asarray(GH, dtype=float))
             n_GH  = len(self._GH_BINS) - 1
-            gh_idx = np.clip(np.searchsorted(self._GH_BINS[1:], GH), 0, n_GH - 1)
+            gh_idx = np.clip(np.searchsorted(self._GH_BINS[1:], GH, side='right'), 0, n_GH - 1)
             out_gh = (GH < self._GH_BINS[0]) | (GH >= self._GH_BINS[-1])
             result = self._selfunc[h_idx, pix, gh_idx]
             out_of_range = out_h | out_gh
