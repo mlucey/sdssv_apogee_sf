@@ -161,6 +161,12 @@ def _build_adaptive(
                 with np.errstate(invalid="ignore", divide="ignore"):
                     sf = np.where(ha > 0, ht / ha, np.nan)
 
+            # A denominator cell can (rarely) undercount real 2MASS sources --
+            # e.g. a genuine Gaia match missing from the cross-match table used
+            # to build the denominator -- letting ht exceed ha and the ratio
+            # exceed 1. Clip to a valid probability; NaN passes through.
+            sf = np.clip(sf, 0.0, 1.0)
+
             # Upgrade coarse SF values back to fine grid
             if ns < nside:
                 if use_color:
