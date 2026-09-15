@@ -69,13 +69,16 @@ def _degrade_sum(arr1d: np.ndarray, nside_in: int, nside_out: int) -> np.ndarray
     return hp.ud_grade(arr1d.astype(float), nside_out) * n_children
 
 
+_VALID_ESTIMATORS = ("expectation", "map")
+
+
 def _build_adaptive(
     hist_all: np.ndarray,
     hist_obs: np.ndarray,
     nside: int,
     min_count: int = 5,
     nside_min: int = 8,
-    use_prior: bool = True,
+    estimator: str = "expectation",
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Compute SF with adaptive HEALPix coarsening.
@@ -86,6 +89,11 @@ def _build_adaptive(
     sums ALL fine pixels, not just uncovered ones).  This repeats down to
     *nside_min*.  Cells still uncovered after that remain NaN.
 
+    Both estimators summarise the same posterior — a Beta(N_obs + 1,
+    N_2MASS − N_obs + 1) distribution obtained from a uniform Beta(1, 1)
+    prior — so the prior is used either way; only the summary statistic
+    reported for it differs.
+
     Parameters
     ----------
     hist_all : (n_H, n_pix) or (n_H, n_pix, n_GH) — denominator counts at nside
@@ -93,16 +101,21 @@ def _build_adaptive(
     nside    : int — fine resolution (RING ordering)
     min_count: int
     nside_min: int
-    use_prior: bool — if True (default), use the Bayesian Beta(1,1) estimate
-        ``(N_obs + 1) / (N_2MASS + 2)``.  If False, use the raw MLE ratio
-        ``N_obs / N_2MASS`` (undefined cells, where the coarsened denominator
-        is still zero, stay NaN).
+    estimator: {'expectation', 'map'} — which point estimate of the posterior
+        to report. 'expectation' (default) is the posterior mean,
+        ``S = (N_obs + 1) / (N_2MASS + 2)``. 'map' is the posterior mode,
+        which for a uniform prior coincides with the raw ratio
+        ``S = N_obs / N_2MASS`` (undefined cells, where the coarsened
+        denominator is still zero, stay NaN).
 
     Returns
     -------
     sf       : same shape as hist_all — SF values in [0,1] or NaN
     nside_map: (n_H, n_pix) — effective nside used per (H-bin, pixel)
     """
+    if estimator not in _VALID_ESTIMATORS:
+        raise ValueError(f"estimator={estimator!r} must be one of {_VALID_ESTIMATORS}")
+
     use_color = hist_all.ndim == 3
     if use_color:
         n_h, npix_max, n_gh = hist_all.shape
@@ -155,9 +168,9 @@ def _build_adaptive(
         new_covered = good_at_max & ~covered
 
         if new_covered.any():
-            if use_prior:
+            if estimator == "expectation":
                 sf = (ht + 1.0) / (ha + 2.0)
-            else:
+            else:  # estimator == "map"
                 with np.errstate(invalid="ignore", divide="ignore"):
                     sf = np.where(ha > 0, ht / ha, np.nan)
 
@@ -237,7 +250,7 @@ class APOGEESelectionFunction:
         nside: int,
         GH_BINS: np.ndarray | None = None,
         nside_map: np.ndarray | None = None,
-        use_prior: bool = True,
+        estimator: str = "expectation",
     ) -> None:
         """
         Parameters
@@ -249,9 +262,10 @@ class APOGEESelectionFunction:
         nside     : int — HEALPix nside (RING ordering)
         GH_BINS   : (n_GH + 1,) or None — G-H bin edges if colour axis is used
         nside_map : (n_pix,) or None — effective nside per pixel after adaptive coarsening
-        use_prior : bool — whether *selfunc* was computed with the Bayesian
-            Beta(1,1) prior (``True``) or as the raw MLE ratio (``False``).
-            Recorded for provenance; does not affect querying.
+        estimator : {'expectation', 'map'} — which point estimate of the
+            Beta(1,1)-prior posterior *selfunc* was computed as: the
+            posterior mean (``'expectation'``) or posterior mode
+            (``'map'``). Recorded for provenance; does not affect querying.
         """
         self._selfunc   = selfunc
         self._hist_all  = hist_all
@@ -260,7 +274,7 @@ class APOGEESelectionFunction:
         self._GH_BINS   = GH_BINS
         self._nside     = nside
         self._nside_map = nside_map
-        self._use_prior = use_prior
+        self._estimator = estimator
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -281,9 +295,9 @@ class APOGEESelectionFunction:
         return self._GH_BINS is not None
 
     @property
-    def use_prior(self) -> bool:
-        """Whether the SF was computed with the Bayesian Beta(1,1) prior."""
-        return self._use_prior
+    def estimator(self) -> str:
+        """Which posterior point estimate ('expectation' or 'map') the SF uses."""
+        return self._estimator
 
     # ── Constructors ──────────────────────────────────────────────────────────
 
@@ -298,7 +312,7 @@ class APOGEESelectionFunction:
         nside: int = 64,
         min_count: int = 5,
         nside_min: int = 8,
-        use_prior: bool = True,
+        estimator: str = "expectation",
         h_bin_size: float | None = None,
         gh_bin_size: float | None = None,
         h_range: tuple[float, float] | None = None,
@@ -320,11 +334,14 @@ class APOGEESelectionFunction:
         min_count : minimum 2MASS sources per adaptive cell before merging to a
             coarser resolution (default 5).
         nside_min : coarsest HEALPix resolution allowed by adaptive binning (default 8).
-        use_prior : if True (default), compute the SF with a Bayesian Beta(1,1)
-            prior, ``S = (N_observed + 1) / (N_2MASS + 2)``.  If False, compute
-            the raw MLE ratio ``S = N_observed / N_2MASS`` instead — cells are
-            still merged to coarser resolution via *min_count* / *nside_min*,
-            but the SF value itself is not shrunk toward 0.5.
+        estimator : {'expectation', 'map'} — which point estimate of the
+            Beta(1,1)-prior posterior to report. ``'expectation'`` (default)
+            is the posterior mean, ``S = (N_observed + 1) / (N_2MASS + 2)``.
+            ``'map'`` is the posterior mode, which for a uniform prior
+            coincides with the raw ratio ``S = N_observed / N_2MASS`` — cells
+            are still merged to coarser resolution via *min_count* /
+            *nside_min* either way; only the reported value differs, and
+            ``'map'`` is not shrunk toward 0.5.
         h_bin_size : H-magnitude bin width in magnitudes.  Must be a positive multiple
             of the denominator's native 0.5-mag step (i.e. 0.5, 1.0, 1.5, …).
             Defaults to the native resolution (0.5 mag).
@@ -489,7 +506,7 @@ class APOGEESelectionFunction:
         # ── Adaptive SF ───────────────────────────────────────────────────────
         sf, nside_map = _build_adaptive(
             hist_all, hist_obs, nside=nside,
-            min_count=min_count, nside_min=nside_min, use_prior=use_prior,
+            min_count=min_count, nside_min=nside_min, estimator=estimator,
         )
 
         return cls(
@@ -500,7 +517,7 @@ class APOGEESelectionFunction:
             nside=nside,
             GH_BINS=GH_BINS if use_color else None,
             nside_map=nside_map,
-            use_prior=use_prior,
+            estimator=estimator,
         )
 
     @classmethod
@@ -651,7 +668,7 @@ class APOGEESelectionFunction:
             "hist_obs": self._hist_obs,
             "H_BINS":   self._H_BINS,
             "nside":    np.array(self._nside),
-            "use_prior": np.array(self._use_prior),
+            "estimator": np.array(self._estimator),
         }
         if self._GH_BINS is not None:
             arrays["GH_BINS"] = self._GH_BINS
@@ -663,6 +680,13 @@ class APOGEESelectionFunction:
     def read(cls, path: str | Path) -> "APOGEESelectionFunction":
         """Load from a .npz file written by :meth:`write`."""
         d = np.load(path, allow_pickle=False)
+        if "estimator" in d:
+            estimator = str(d["estimator"])
+        elif "use_prior" in d:
+            # Files written before the use_prior -> estimator rename.
+            estimator = "expectation" if bool(d["use_prior"]) else "map"
+        else:
+            estimator = "expectation"
         return cls(
             selfunc   = d["selfunc"],
             hist_all  = d["hist_all"],
@@ -671,5 +695,5 @@ class APOGEESelectionFunction:
             nside     = int(d["nside"]),
             GH_BINS   = d["GH_BINS"]   if "GH_BINS"   in d else None,
             nside_map = d["nside_map"] if "nside_map" in d else None,
-            use_prior = bool(d["use_prior"]) if "use_prior" in d else True,
+            estimator = estimator,
         )

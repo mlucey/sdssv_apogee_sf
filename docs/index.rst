@@ -25,8 +25,9 @@ using a Bayesian Beta(1, 1) prior by default.  The sky is pixelised with
 HEALPix and pixels with too few 2MASS sources are adaptively merged to
 coarser resolution.
 
-Pass ``use_prior=False`` to :meth:`~sdssv_apogee_sf.APOGEESelectionFunction.from_observed`
-to instead use the raw MLE ratio :math:`S = N_\mathrm{observed} / N_\mathrm{2MASS}`,
+Pass ``estimator='map'`` to :meth:`~sdssv_apogee_sf.APOGEESelectionFunction.from_observed`
+to report the posterior mode instead of the mean. For a uniform Beta(1, 1)
+prior the mode coincides with the raw ratio :math:`S = N_\mathrm{observed} / N_\mathrm{2MASS}`,
 without the +1/+2 shrinkage toward 0.5.
 
 Quick start::
