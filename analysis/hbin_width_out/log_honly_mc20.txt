@@ -1,0 +1,52 @@
+Input /Users/maddielucey/gg_selec_func/sdssv_apogee_sf/gg_sf_dr19.npz: shape=(26, 49152), nside=64, min_count=20, colour=False
+
+H scheme 0.5 (26 bins): edges [-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0]
+  stars at nside 64/32/16/8/uncov: 78.9% / 15.9% / 4.7% / 0.5% / 0.0%
+  star-weighted mean pixel size: 1.22 deg; median posterior sigma: 0.033
+  H-smoothing cost @nside 16: rms dS=0.0000, median |dS|/S=0.0% (fine-bin noise rms 0.0121; 93% of stars)
+  noise-debiased smoothing rms dS=0.0000 = 0.0% of star-weighted mean S (0.085); hybrid-corrected: 0.0%
+  raw rms dS (no debias): wide=0.0000, hybrid=0.0000, fine-bin noise=0.0121
+
+H scheme 1.0 (13 bins): edges [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+  stars at nside 64/32/16/8/uncov: 88.7% / 9.4% / 1.9% / 0.0% / 0.0%
+  star-weighted mean pixel size: 1.06 deg; median posterior sigma: 0.024
+  H-smoothing cost @nside 16: rms dS=0.0123, median |dS|/S=7.8% (fine-bin noise rms 0.0121; 93% of stars)
+  noise-debiased smoothing rms dS=0.0087 = 10.3% of star-weighted mean S (0.085); hybrid-corrected: 0.0%
+  raw rms dS (no debias): wide=0.0123, hybrid=0.0077, fine-bin noise=0.0121
+
+H scheme 1.5 (9 bins): edges [-2.0, -0.5, 1.0, 2.5, 4.0, 5.5, 7.0, 8.5, 10.0, 11.0]
+  stars at nside 64/32/16/8/uncov: 93.0% / 6.2% / 0.7% / 0.0% / 0.0%
+  star-weighted mean pixel size: 0.99 deg; median posterior sigma: 0.023
+  H-smoothing cost @nside 16: rms dS=0.0148, median |dS|/S=8.7% (fine-bin noise rms 0.0121; 93% of stars)
+  noise-debiased smoothing rms dS=0.0111 = 13.1% of star-weighted mean S (0.085); hybrid-corrected: 0.0%
+  raw rms dS (no debias): wide=0.0148, hybrid=0.0086, fine-bin noise=0.0121
+
+H scheme 2.0 (7 bins): edges [-2.0, 0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 11.0]
+  stars at nside 64/32/16/8/uncov: 94.0% / 5.1% / 0.8% / 0.0% / 0.0%
+  star-weighted mean pixel size: 0.99 deg; median posterior sigma: 0.021
+  H-smoothing cost @nside 16: rms dS=0.0229, median |dS|/S=9.9% (fine-bin noise rms 0.0121; 93% of stars)
+  noise-debiased smoothing rms dS=0.0204 = 24.1% of star-weighted mean S (0.085); hybrid-corrected: 0.0%
+  raw rms dS (no debias): wide=0.0229, hybrid=0.0092, fine-bin noise=0.0121
+
+H scheme 3.0 (5 bins): edges [-2.0, 1.0, 4.0, 7.0, 10.0, 11.0]
+  stars at nside 64/32/16/8/uncov: 98.0% / 2.0% / 0.0% / 0.0% / 0.0%
+  star-weighted mean pixel size: 0.93 deg; median posterior sigma: 0.020
+  H-smoothing cost @nside 16: rms dS=0.0237, median |dS|/S=10.1% (fine-bin noise rms 0.0121; 93% of stars)
+  noise-debiased smoothing rms dS=0.0211 = 24.9% of star-weighted mean S (0.085); hybrid-corrected: 0.0%
+  raw rms dS (no debias): wide=0.0237, hybrid=0.0104, fine-bin noise=0.0121
+
+H scheme var-2.0 (3 bins): edges [-2.0, 7.0, 9.0, 11.0]
+  stars at nside 64/32/16/8/uncov: 95.5% / 4.4% / 0.1% / 0.0% / 0.0%
+  star-weighted mean pixel size: 0.96 deg; median posterior sigma: 0.017
+  H-smoothing cost @nside 16: rms dS=0.0202, median |dS|/S=12.8% (fine-bin noise rms 0.0121; 93% of stars)
+  noise-debiased smoothing rms dS=0.0172 = 20.3% of star-weighted mean S (0.085); hybrid-corrected: 0.0%
+  raw rms dS (no debias): wide=0.0202, hybrid=0.0102, fine-bin noise=0.0121
+
+H scheme var-0.5|2 (6 bins): edges [-2.0, 7.0, 7.5, 8.0, 8.5, 9.0, 11.0]
+  stars at nside 64/32/16/8/uncov: 84.8% / 10.5% / 4.3% / 0.4% / 0.0%
+  star-weighted mean pixel size: 1.16 deg; median posterior sigma: 0.018
+  H-smoothing cost @nside 16: rms dS=0.0161, median |dS|/S=8.1% (fine-bin noise rms 0.0121; 93% of stars)
+  noise-debiased smoothing rms dS=0.0147 = 17.3% of star-weighted mean S (0.085); hybrid-corrected: 3.3%
+  raw rms dS (no debias): wide=0.0161, hybrid=0.0072, fine-bin noise=0.0121
+
+Saved /Users/maddielucey/gg_selec_func/sdssv_apogee_sf/.claude/worktrees/hbin-width-test/analysis/hbin_width_out/hbin_width_gg_sf_dr19_mc20.pdf (+ .png)
