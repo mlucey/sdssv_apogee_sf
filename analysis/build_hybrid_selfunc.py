@@ -83,40 +83,20 @@ def nside_map_convention(ns_eff):
     return np.where(m == np.iinfo(np.int32).max, 0, m).astype(np.int32)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--input', required=True)
-    ap.add_argument('--output', required=True)
-    ap.add_argument('--level-h-edges', type=float, nargs='+', default=list(LEVEL_H_EDGES))
-    args = ap.parse_args()
-
-    d = np.load(args.input)
-    nside = int(d['nside'])
-    min_count = int(d['min_count'])
-    nside_min = int(d['nside_min'])
-    estimator = str(d['estimator'])
-    H_BINS = d['H_BINS']
-    level_edges = np.asarray(args.level_h_edges, float)
-    print(f"{args.input}: nside={nside} min_count={min_count} nside_min={nside_min} "
-          f"estimator={estimator} level H edges={level_edges.tolist()}")
-
-    ha = to_nest(d['hist_all'].astype(float), nside)
-    ho = to_nest(d['hist_obs'].astype(float), nside)
-
-    # 1. Original SF (and check it reproduces the stored file exactly)
-    sf_fine, ns_fine = adaptive(ha, ho, nside, min_count, nside_min, estimator)
-    same = np.allclose(to_ring(sf_fine, nside), d['selfunc'], equal_nan=True)
-    same_map = np.array_equal(to_ring(nside_map_convention(ns_fine), nside), d['nside_map'])
-    print(f"reproduces stored selfunc: {same}; stored nside_map: {same_map}")
-    if not same:
-        raise SystemExit("Could not reproduce the input selfunc; aborting.")
-
+def hybrid_nest(ha, ho, sf_fine, ns_fine, H_BINS, level_edges, nside, min_count,
+                nside_min, estimator):
+    """
+    Hybrid SF on NESTED arrays of shape (n_H, n_pix[, n_GH]).  *sf_fine*,
+    *ns_fine* are the original adaptive SF and per-cell nside (from adaptive()).
+    Returns (hyb, ns_used): unclipped hybrid SF (NaN where the original is NaN)
+    and the per-cell nside of the sky level actually used.
+    """
+    level_edges = np.asarray(level_edges, float)
     # 2. Merged level bins
     starts = np.searchsorted(H_BINS, level_edges[:-1] - 1e-9)
     if (not np.allclose(H_BINS[starts], level_edges[:-1])
             or not np.isclose(level_edges[-1], H_BINS[-1])):
-        raise SystemExit(f"level edges {level_edges} not aligned with H_BINS")
+        raise ValueError(f"level edges {level_edges} not aligned with H_BINS")
     parent = np.repeat(np.arange(len(starts)), np.diff(np.append(starts, ha.shape[0])))
     la = np.add.reduceat(ha, starts, axis=0)
     lo = np.add.reduceat(ho, starts, axis=0)
@@ -166,11 +146,57 @@ def main():
             hyb[m] = s[m]
         ns //= 2
 
-    hyb_unclipped = np.where(ns_fine == 0, np.nan, hyb)
-    hyb = np.where(ns_fine == 0, np.nan, np.clip(hyb, 0.0, 1.0))
+    hyb = np.where(ns_fine == 0, np.nan, hyb)
+    ns_used = np.where(ns_fine > 0, np.maximum(ns_L, ns_fine), 0).astype(np.int32)
+    return hyb, ns_used
+
+
+def hybrid_ring(hist_all, hist_obs, H_BINS, nside, min_count, nside_min, estimator,
+                level_edges=LEVEL_H_EDGES):
+    """RING-order convenience wrapper: returns the clipped hybrid SF."""
+    ha = to_nest(np.asarray(hist_all, float), nside)
+    ho = to_nest(np.asarray(hist_obs, float), nside)
+    sf_fine, ns_fine = adaptive(ha, ho, nside, min_count, nside_min, estimator)
+    hyb, _ = hybrid_nest(ha, ho, sf_fine, ns_fine, H_BINS, level_edges,
+                         nside, min_count, nside_min, estimator)
+    return to_ring(np.clip(hyb, 0.0, 1.0), nside)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--input', required=True)
+    ap.add_argument('--output', required=True)
+    ap.add_argument('--level-h-edges', type=float, nargs='+', default=list(LEVEL_H_EDGES))
+    args = ap.parse_args()
+
+    d = np.load(args.input)
+    nside = int(d['nside'])
+    min_count = int(d['min_count'])
+    nside_min = int(d['nside_min'])
+    estimator = str(d['estimator'])
+    H_BINS = d['H_BINS']
+    level_edges = np.asarray(args.level_h_edges, float)
+    print(f"{args.input}: nside={nside} min_count={min_count} nside_min={nside_min} "
+          f"estimator={estimator} level H edges={level_edges.tolist()}")
+
+    ha = to_nest(d['hist_all'].astype(float), nside)
+    ho = to_nest(d['hist_obs'].astype(float), nside)
+
+    # 1. Original SF (and check it reproduces the stored file exactly)
+    sf_fine, ns_fine = adaptive(ha, ho, nside, min_count, nside_min, estimator)
+    same = np.allclose(to_ring(sf_fine, nside), d['selfunc'], equal_nan=True)
+    same_map = np.array_equal(to_ring(nside_map_convention(ns_fine), nside), d['nside_map'])
+    print(f"reproduces stored selfunc: {same}; stored nside_map: {same_map}")
+    if not same:
+        raise SystemExit("Could not reproduce the input selfunc; aborting.")
+
+    # 2-3. Hybrid from the merged level bins
+    hyb_unclipped, ns_used = hybrid_nest(ha, ho, sf_fine, ns_fine, H_BINS, level_edges,
+                                         nside, min_count, nside_min, estimator)
+    hyb = np.where(ns_fine == 0, np.nan, np.clip(hyb_unclipped, 0.0, 1.0))
     print(f"cells clipped at S=1: {(hyb_unclipped > 1).sum():,} "
           f"of {np.isfinite(hyb).sum():,} finite")
-    ns_used = np.where(ns_fine > 0, np.maximum(ns_L, ns_fine), 0).astype(np.int32)
 
     # Sanity: the children assigned to each original coarse value keep its expected
     # observed count.  Checked before and after clipping S to <= 1.
