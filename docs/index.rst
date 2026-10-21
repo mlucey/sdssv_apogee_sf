@@ -31,7 +31,7 @@ prior the mode coincides with the raw ratio :math:`S = N_\mathrm{observed} / N_\
 without the +1/+2 shrinkage toward 0.5.
 
 Small-scale structure from merged H bins
----------------------------------------
+----------------------------------------
 
 In sparsely populated :math:`(H, G{-}H)` bins the adaptive scheme has to
 coarsen the HEALPix resolution until each cell holds ``min_count`` 2MASS
