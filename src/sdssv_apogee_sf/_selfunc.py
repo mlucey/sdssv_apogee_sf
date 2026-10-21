@@ -206,7 +206,7 @@ def _build_adaptive(
     return sf_out, nside_map
 
 
-# ── Hybrid (merged-H sky pattern) selection function ─────────────────────────
+# ── Merged-H (sky pattern from wider H bins) selection function ──────────────
 #
 # The helpers below work on NESTED-ordered arrays of shape (n_H, n_pix[, n_GH]),
 # where the children of a coarse pixel are contiguous, so degrading is a
@@ -290,7 +290,7 @@ def _h_merge_edges(H_BINS: np.ndarray, breaks) -> np.ndarray:
     return np.asarray(edges, dtype=float)
 
 
-def _build_hybrid(
+def _build_merged_h(
     hist_all: np.ndarray,
     hist_obs: np.ndarray,
     H_BINS: np.ndarray,
@@ -301,7 +301,7 @@ def _build_hybrid(
     estimator: str = "expectation",
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute the hybrid SF: the adaptive SF of :func:`_build_adaptive`, with
+    Compute the merged-H SF: the adaptive SF of :func:`_build_adaptive`, with
     the angular structure inside each coarsened cell borrowed from wider,
     merged H bins.
 
@@ -460,7 +460,7 @@ class APOGEESelectionFunction:
             Beta(1,1)-prior posterior *selfunc* was computed as: the
             posterior mean (``'expectation'``) or posterior mode
             (``'map'``). Recorded for provenance; does not affect querying.
-        h_merge_edges : H edges of the merged bins used for the hybrid SF, or
+        h_merge_edges : H edges of the merged bins used for the merged-H SF, or
             None if *selfunc* is the plain adaptive SF.  Recorded for
             provenance; does not affect querying.
         """
@@ -500,13 +500,13 @@ class APOGEESelectionFunction:
 
     @property
     def h_merge_edges(self) -> np.ndarray | None:
-        """H edges of the merged bins behind the hybrid SF; None if plain adaptive."""
+        """H edges of the merged bins behind the merged-H SF; None if plain adaptive."""
         return self._h_merge_edges
 
     @property
     def method(self) -> str:
-        """'hybrid' or 'adaptive'."""
-        return "adaptive" if self._h_merge_edges is None else "hybrid"
+        """'merged_h' (merged H bins used) or 'adaptive' (merging off)."""
+        return "adaptive" if self._h_merge_edges is None else "merged_h"
 
     # ── Constructors ──────────────────────────────────────────────────────────
 
@@ -722,7 +722,7 @@ class APOGEESelectionFunction:
             nside=nside, H_BINS=H_BINS, GH_BINS=GH_BINS if use_color else None,
         )
 
-        # ── Hybrid (default) or plain adaptive SF ────────────────────────────
+        # ── Merged-H (default) or plain adaptive SF ──────────────────────────
         if h_merge_breaks is None:
             h_merge_edges = None
             sf, nside_map = _build_adaptive(
@@ -731,7 +731,7 @@ class APOGEESelectionFunction:
             )
         else:
             h_merge_edges = _h_merge_edges(H_BINS, h_merge_breaks)
-            sf, nside_map = _build_hybrid(
+            sf, nside_map = _build_merged_h(
                 hist_all, hist_obs, H_BINS, nside, h_merge_edges,
                 min_count=min_count, nside_min=nside_min, estimator=estimator,
             )
@@ -920,7 +920,7 @@ class APOGEESelectionFunction:
         if "h_merge_edges" in d:
             h_merge_edges = d["h_merge_edges"]
         elif "level_h_edges" in d:
-            # Hybrid files made by the earlier analysis/build_hybrid_selfunc.py.
+            # Merged-H files made by the earlier analysis/build_hybrid_selfunc.py.
             h_merge_edges = d["level_h_edges"]
         else:
             h_merge_edges = None   # plain adaptive SF

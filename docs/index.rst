@@ -68,7 +68,7 @@ Control it with ``h_merge_breaks``::
 Breaks are snapped to the nearest :math:`H` bin edge.  The merged-bin edges
 used are stored with the selection function (``sf.h_merge_edges``, saved by
 :meth:`~sdssv_apogee_sf.APOGEESelectionFunction.write`), and ``sf.method``
-reports ``'hybrid'`` (merged bins used) or ``'adaptive'`` (merging off).
+reports ``'merged_h'`` (merged bins used) or ``'adaptive'`` (merging off).
 
 Quick start::
 

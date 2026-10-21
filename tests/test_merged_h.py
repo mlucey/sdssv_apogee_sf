@@ -1,4 +1,4 @@
-"""Tests for the hybrid (merged-H sky pattern) selection function."""
+"""Tests for the merged-H (sky pattern from wider H bins) selection function."""
 import warnings
 
 import healpy as hp
@@ -9,7 +9,7 @@ from sdssv_apogee_sf import APOGEESelectionFunction
 from sdssv_apogee_sf._selfunc import (
     _adaptive_nest,
     _build_adaptive,
-    _build_hybrid,
+    _build_merged_h,
     _degrade_nest,
     _h_merge_edges,
     _to_nest,
@@ -39,12 +39,12 @@ def _counts(seed=0, color=True):
 def test_nan_pattern_and_range(estimator, color):
     ha, ho = _counts(color=color)
     sf_a, _ = _build_adaptive(ha, ho, NSIDE, MIN_COUNT, NSIDE_MIN, estimator)
-    sf_h, nmap = _build_hybrid(ha, ho, H_BINS, NSIDE, EDGES, MIN_COUNT, NSIDE_MIN, estimator)
+    sf_h, nmap = _build_merged_h(ha, ho, H_BINS, NSIDE, EDGES, MIN_COUNT, NSIDE_MIN, estimator)
     assert np.array_equal(np.isnan(sf_h), np.isnan(sf_a))
     finite = sf_h[np.isfinite(sf_h)]
     assert finite.min() >= 0.0 and finite.max() <= 1.0
     assert nmap.shape == ha.shape[:2]
-    assert not np.allclose(sf_h, sf_a, equal_nan=True)  # hybrid actually adds detail
+    assert not np.allclose(sf_h, sf_a, equal_nan=True)  # merging actually adds detail
 
 
 @pytest.mark.parametrize("estimator", ["expectation", "map"])
@@ -60,7 +60,7 @@ def test_adaptive_nest_matches_build_adaptive(estimator):
 def test_expected_counts_conserved(estimator):
     """Each original coarse cell keeps its expected number of observed stars."""
     ha, ho = _counts()
-    sf_h, _ = _build_hybrid(ha, ho, H_BINS, NSIDE, EDGES, MIN_COUNT, NSIDE_MIN, estimator)
+    sf_h, _ = _build_merged_h(ha, ho, H_BINS, NSIDE, EDGES, MIN_COUNT, NSIDE_MIN, estimator)
     han = _to_nest(ha, NSIDE)
     sf_n, ns_eff = _adaptive_nest(han, _to_nest(ho, NSIDE), NSIDE, MIN_COUNT, NSIDE_MIN, estimator)
     hyb_n = _to_nest(sf_h, NSIDE)
@@ -79,7 +79,7 @@ def test_unmerged_edges_reduce_to_adaptive(estimator):
     """If every merged bin is a single native bin, nothing changes."""
     ha, ho = _counts()
     sf_a, nmap_a = _build_adaptive(ha, ho, NSIDE, MIN_COUNT, NSIDE_MIN, estimator)
-    sf_h, nmap_h = _build_hybrid(ha, ho, H_BINS, NSIDE, H_BINS, MIN_COUNT, NSIDE_MIN, estimator)
+    sf_h, nmap_h = _build_merged_h(ha, ho, H_BINS, NSIDE, H_BINS, MIN_COUNT, NSIDE_MIN, estimator)
     assert np.allclose(sf_h, sf_a, equal_nan=True)
     assert np.array_equal(nmap_h, nmap_a)
 
@@ -87,7 +87,7 @@ def test_unmerged_edges_reduce_to_adaptive(estimator):
 def test_misaligned_edges_raise():
     ha, ho = _counts()
     with pytest.raises(ValueError):
-        _build_hybrid(ha, ho, H_BINS, NSIDE, [5.0, 7.2, 9.0], MIN_COUNT, NSIDE_MIN)
+        _build_merged_h(ha, ho, H_BINS, NSIDE, [5.0, 7.2, 9.0], MIN_COUNT, NSIDE_MIN)
 
 
 def test_h_merge_edges():
@@ -103,13 +103,13 @@ def test_h_merge_edges():
 
 def test_write_read_roundtrip(tmp_path):
     ha, ho = _counts()
-    sf_h, nmap = _build_hybrid(ha, ho, H_BINS, NSIDE, EDGES, MIN_COUNT, NSIDE_MIN)
+    sf_h, nmap = _build_merged_h(ha, ho, H_BINS, NSIDE, EDGES, MIN_COUNT, NSIDE_MIN)
     sf = APOGEESelectionFunction(sf_h, ha, ho, H_BINS, NSIDE, GH_BINS, nmap,
                                  h_merge_edges=EDGES)
-    assert sf.method == "hybrid"
+    assert sf.method == "merged_h"
     sf.write(tmp_path / "hyb.npz")
     back = APOGEESelectionFunction.read(tmp_path / "hyb.npz")
-    assert back.method == "hybrid"
+    assert back.method == "merged_h"
     assert np.array_equal(back.h_merge_edges, EDGES)
 
     plain = APOGEESelectionFunction(sf_h, ha, ho, H_BINS, NSIDE, GH_BINS, nmap)
@@ -124,7 +124,7 @@ def test_write_read_roundtrip(tmp_path):
     assert np.array_equal(legacy.h_merge_edges, EDGES)
 
 
-def test_from_observed_default_is_hybrid():
+def test_from_observed_default_is_merged_h():
     """Uses the bundled 2MASS denominator."""
     rng = np.random.default_rng(1)
     n = 4000
@@ -138,7 +138,7 @@ def test_from_observed_default_is_hybrid():
         warnings.simplefilter("ignore")
         hyb = APOGEESelectionFunction.from_observed(table, **kw)
         ada = APOGEESelectionFunction.from_observed(table, h_merge_breaks=None, **kw)
-    assert hyb.method == "hybrid" and np.array_equal(hyb.h_merge_edges, [6.0, 7.0, 8.0])
+    assert hyb.method == "merged_h" and np.array_equal(hyb.h_merge_edges, [6.0, 7.0, 8.0])
     assert ada.method == "adaptive" and ada.h_merge_edges is None
     sf_a, _ = _build_adaptive(ada._hist_all, ada._hist_obs, ada.nside, 20, 8)
     assert np.allclose(ada._selfunc, sf_a, equal_nan=True)
