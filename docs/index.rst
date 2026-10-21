@@ -30,14 +30,14 @@ to report the posterior mode instead of the mean. For a uniform Beta(1, 1)
 prior the mode coincides with the raw ratio :math:`S = N_\mathrm{observed} / N_\mathrm{2MASS}`,
 without the +1/+2 shrinkage toward 0.5.
 
-Hybrid selection function (default)
------------------------------------
+Small-scale structure from merged H bins
+---------------------------------------
 
 In sparsely populated :math:`(H, G{-}H)` bins the adaptive scheme has to
 coarsen the HEALPix resolution until each cell holds ``min_count`` 2MASS
 sources, which can wash out real small-scale structure in the footprint.
 By default, :meth:`~sdssv_apogee_sf.APOGEESelectionFunction.from_observed`
-therefore builds a *hybrid* selection function.  It assumes that the
+therefore recovers this structure from wider magnitude bins, assuming that the
 small-scale angular pattern of the completeness varies only weakly with
 :math:`H` over broad magnitude ranges:
 
@@ -49,7 +49,7 @@ small-scale angular pattern of the completeness varies only weakly with
    completeness, normalised so that the cell's expected number of observed
    stars is exactly preserved.
 
-The hybrid is therefore identical to the adaptive selection function on
+The result is therefore identical to the adaptive selection function on
 the original coarse scale and only adds angular detail within each cell.
 Cells where the merged bin is no better resolved, or that were
 unconstrained, are unchanged, and values are capped at 1.
@@ -68,7 +68,7 @@ Control it with ``h_merge_breaks``::
 Breaks are snapped to the nearest :math:`H` bin edge.  The merged-bin edges
 used are stored with the selection function (``sf.h_merge_edges``, saved by
 :meth:`~sdssv_apogee_sf.APOGEESelectionFunction.write`), and ``sf.method``
-reports ``'hybrid'`` or ``'adaptive'``.
+reports ``'hybrid'`` (merged bins used) or ``'adaptive'`` (merging off).
 
 Quick start::
 
