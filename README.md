@@ -22,4 +22,11 @@ sf = APOGEESelectionFunction.from_observed(
 completeness = sf.query(coords, H=h_mag, GH=g_mag - h_mag)
 ```
 
+By default, sparse cells are coarsened on the sky as usual and then given
+finer angular detail from wider merged H bins
+(split at H = 7) while keeping each cell's expected number of observed stars.
+Pass `h_merge_breaks=(...)` to choose different merged bins, or
+`h_merge_breaks=None` for the plain adaptive selection function. See the
+[documentation](https://sdssv-apogee-sf.readthedocs.io) for details.
+
 See the [tutorial notebook](tutorial.ipynb) for a worked example using the public SDSS DR19 ASPCAP 0.6.0 catalogue.
