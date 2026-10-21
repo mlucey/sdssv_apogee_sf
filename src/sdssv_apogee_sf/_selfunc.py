@@ -206,6 +206,199 @@ def _build_adaptive(
     return sf_out, nside_map
 
 
+# ── Hybrid (merged-H sky pattern) selection function ─────────────────────────
+#
+# The helpers below work on NESTED-ordered arrays of shape (n_H, n_pix[, n_GH]),
+# where the children of a coarse pixel are contiguous, so degrading is a
+# reshape + sum.
+
+# Default interior H break(s) for the merged sky-pattern bins: with the outer
+# edges taken from the H range in use, this gives H < 7 and H >= 7.
+H_MERGE_BREAKS_DEFAULT = (7.0,)
+
+
+def _to_nest(arr: np.ndarray, nside: int) -> np.ndarray:
+    return arr[:, hp.nest2ring(nside, np.arange(hp.nside2npix(nside)))]
+
+
+def _to_ring(arr: np.ndarray, nside: int) -> np.ndarray:
+    return arr[:, hp.ring2nest(nside, np.arange(hp.nside2npix(nside)))]
+
+
+def _degrade_nest(arr: np.ndarray, nside: int, ns: int) -> np.ndarray:
+    """Sum the NESTED children of each nside-*ns* pixel along axis 1."""
+    k = (nside // ns) ** 2
+    return arr.reshape((arr.shape[0], arr.shape[1] // k, k) + arr.shape[2:]).sum(axis=2)
+
+
+def _estimate(o: np.ndarray, a: np.ndarray, estimator: str) -> np.ndarray:
+    if estimator == "expectation":
+        return (o + 1.0) / (a + 2.0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(a > 0, o / a, np.nan)
+
+
+def _adaptive_nest(ha, ho, nside, min_count, nside_min, estimator):
+    """
+    NESTED-order equivalent of :func:`_build_adaptive` that also returns the
+    effective nside of every individual cell (not just per (H, pixel)).
+    """
+    sf = np.full(ha.shape, np.nan)
+    ns_eff = np.zeros(ha.shape, dtype=np.int32)
+    ns = nside
+    while ns >= max(nside_min, 1):
+        k = (nside // ns) ** 2
+        a, o = _degrade_nest(ha, nside, ns), _degrade_nest(ho, nside, ns)
+        good = np.repeat(a >= max(min_count, 1), k, axis=1)
+        s = np.repeat(np.clip(_estimate(o, a, estimator), 0.0, 1.0), k, axis=1)
+        new = good & (ns_eff == 0)
+        sf[new] = s[new]
+        ns_eff[new] = ns
+        ns //= 2
+    return sf, ns_eff
+
+
+def _nside_map_convention(ns_eff: np.ndarray) -> np.ndarray:
+    """Collapse per-cell nside to per (H, pixel): coarsest over G-H, 0 if none."""
+    if ns_eff.ndim == 2:
+        return ns_eff.astype(np.int32)
+    big = np.where(ns_eff > 0, ns_eff, np.iinfo(np.int32).max)
+    m = big.min(axis=2)
+    return np.where(m == np.iinfo(np.int32).max, 0, m).astype(np.int32)
+
+
+def _h_merge_edges(H_BINS: np.ndarray, breaks) -> np.ndarray:
+    """
+    Merged-bin H edges: the outer H_BINS edges plus every interior *break*,
+    snapped to the nearest H_BINS edge (with a warning if it had to move).
+    Breaks at or outside the H range are dropped.
+    """
+    lo, hi = H_BINS[0], H_BINS[-1]
+    edges = [lo]
+    for b in sorted(float(b) for b in breaks):
+        if not lo < b < hi:
+            continue
+        e = H_BINS[np.argmin(np.abs(H_BINS - b))]
+        if not np.isclose(e, b):
+            warnings.warn(
+                f"h_merge_breaks value {b} is not an H bin edge; using {e} instead.",
+                UserWarning, stacklevel=3,
+            )
+        if lo < e < hi and not np.isclose(e, edges[-1]):
+            edges.append(e)
+    edges.append(hi)
+    return np.asarray(edges, dtype=float)
+
+
+def _build_hybrid(
+    hist_all: np.ndarray,
+    hist_obs: np.ndarray,
+    H_BINS: np.ndarray,
+    nside: int,
+    h_merge_edges: np.ndarray,
+    min_count: int = 5,
+    nside_min: int = 8,
+    estimator: str = "expectation",
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the hybrid SF: the adaptive SF of :func:`_build_adaptive`, with
+    the angular structure inside each coarsened cell borrowed from wider,
+    merged H bins.
+
+    The native H bins are summed into the merged bins given by
+    *h_merge_edges*, and the adaptive scheme is run on those.  Having more
+    stars, the merged bins usually reach a finer resolution.  For a native
+    cell (H bin h, coarse pixel P, G-H bin g) whose H bin lies in merged
+    bin J, the value in each fine sub-pixel p of P is
+
+        S_hyb(p) = S(P) * u(p) * N(P) / sum_{p' in P} N(p') u(p')
+
+    where S(P) is the adaptive SF of the cell, N the native 2MASS counts and
+    u the merged bin's SF at the pixel containing p (at the merged bin's own
+    adaptive resolution).  For ``estimator='expectation'`` the coarse cell's
+    single Beta(1, 1) pseudo-count is split over those pixels in proportion
+    to their 2MASS share.  The normalisation keeps each native cell's
+    expected number of observed stars, S(P) N(P), exactly; only its
+    distribution across sub-pixels changes.  Cells where the merged bin is
+    no finer, or that carry no merged-bin signal, keep their adaptive value;
+    NaN cells stay NaN; results are clipped to [0, 1].
+
+    Parameters
+    ----------
+    hist_all, hist_obs, nside, min_count, nside_min, estimator :
+        as for :func:`_build_adaptive` (RING ordering).
+    H_BINS        : (n_H + 1,) — native H edges.
+    h_merge_edges : merged-bin H edges; must be a subset of *H_BINS*
+        spanning the full range (see :func:`_h_merge_edges`).
+
+    Returns
+    -------
+    sf        : same shape as hist_all — SF values in [0, 1] or NaN
+    nside_map : (n_H, n_pix) — finer of the native and merged-bin nside per
+        cell, coarsest over G-H bins (0 where uncovered)
+    """
+    if estimator not in _VALID_ESTIMATORS:
+        raise ValueError(f"estimator={estimator!r} must be one of {_VALID_ESTIMATORS}")
+    h_merge_edges = np.asarray(h_merge_edges, dtype=float)
+    starts = np.searchsorted(H_BINS, h_merge_edges[:-1] - 1e-9)
+    if (not np.allclose(H_BINS[starts], h_merge_edges[:-1])
+            or not np.isclose(h_merge_edges[-1], H_BINS[-1])):
+        raise ValueError(f"h_merge_edges {h_merge_edges} not aligned with H_BINS")
+
+    ha = _to_nest(np.asarray(hist_all, dtype=float), nside)
+    ho = _to_nest(np.asarray(hist_obs, dtype=float), nside)
+    sf_fine, ns_fine = _adaptive_nest(ha, ho, nside, min_count, nside_min, estimator)
+
+    # Merged bins, their adaptive resolution, and their counts in each fine
+    # pixel's merged-bin pixel q.
+    parent = np.repeat(np.arange(len(starts)), np.diff(np.append(starts, ha.shape[0])))
+    la = np.add.reduceat(ha, starts, axis=0)
+    lo = np.add.reduceat(ho, starts, axis=0)
+    _, ns_lvl = _adaptive_nest(la, lo, nside, min_count, nside_min, estimator)
+    LA_q = np.zeros(la.shape)
+    LO_q = np.zeros(la.shape)
+    ns = nside
+    while ns >= max(nside_min, 1):
+        m = ns_lvl == ns
+        if m.any():
+            k = (nside // ns) ** 2
+            LA_q[m] = np.repeat(_degrade_nest(la, nside, ns), k, axis=1)[m]
+            LO_q[m] = np.repeat(_degrade_nest(lo, nside, ns), k, axis=1)[m]
+        ns //= 2
+    LA_q, LO_q, ns_L = LA_q[parent], LO_q[parent], ns_lvl[parent]
+
+    # Count-conserving redistribution within each native cell at its own
+    # resolution.  As in the adaptive scheme, a coarse value is assigned only
+    # to the children not already covered at a finer nside (mask m), so
+    # conservation is over those children only.
+    hyb = np.full(ha.shape, np.nan)
+    ns = nside
+    while ns >= max(nside_min, 1):
+        m = ns_fine == ns
+        if m.any():
+            k = (nside // ns) ** 2
+            if estimator == "expectation":
+                LA_P = np.repeat(_degrade_nest(np.where(m, la[parent], 0.0), nside, ns), k, axis=1)
+                w = LA_q / np.where(LA_P > 0, LA_P, 1.0)
+                with np.errstate(invalid="ignore"):  # 0/0 only outside covered cells
+                    u = (LO_q + w) / (LA_q + 2.0 * w)
+            else:
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    u = np.where(LA_q > 0, LO_q / LA_q, 0.0)
+            u = np.where(m, u, 0.0)
+            norm = np.repeat(_degrade_nest(ha * u, nside, ns), k, axis=1)
+            ha_P = np.repeat(_degrade_nest(np.where(m, ha, 0.0), nside, ns), k, axis=1)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                s = sf_fine * u * ha_P / norm
+            s = np.where(norm > 0, s, sf_fine)  # no merged-bin signal in P: keep adaptive
+            hyb[m] = s[m]
+        ns //= 2
+
+    hyb = np.where(ns_fine == 0, np.nan, np.clip(hyb, 0.0, 1.0))
+    ns_used = np.where(ns_fine > 0, np.maximum(ns_L, ns_fine), 0)
+    return _to_ring(hyb, nside), _to_ring(_nside_map_convention(ns_used), nside)
+
+
 def _pix_for_coords(coords, nside: int) -> np.ndarray:
     """Return RING HEALPix pixel indices (equatorial) for an astropy SkyCoord."""
     ra  = np.atleast_1d(np.asarray(coords.icrs.ra.deg,  dtype=float))
@@ -251,6 +444,7 @@ class APOGEESelectionFunction:
         GH_BINS: np.ndarray | None = None,
         nside_map: np.ndarray | None = None,
         estimator: str = "expectation",
+        h_merge_edges: np.ndarray | None = None,
     ) -> None:
         """
         Parameters
@@ -266,6 +460,9 @@ class APOGEESelectionFunction:
             Beta(1,1)-prior posterior *selfunc* was computed as: the
             posterior mean (``'expectation'``) or posterior mode
             (``'map'``). Recorded for provenance; does not affect querying.
+        h_merge_edges : H edges of the merged bins used for the hybrid SF, or
+            None if *selfunc* is the plain adaptive SF.  Recorded for
+            provenance; does not affect querying.
         """
         self._selfunc   = selfunc
         self._hist_all  = hist_all
@@ -275,6 +472,8 @@ class APOGEESelectionFunction:
         self._nside     = nside
         self._nside_map = nside_map
         self._estimator = estimator
+        self._h_merge_edges = (None if h_merge_edges is None
+                               else np.asarray(h_merge_edges, dtype=float))
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -299,6 +498,16 @@ class APOGEESelectionFunction:
         """Which posterior point estimate ('expectation' or 'map') the SF uses."""
         return self._estimator
 
+    @property
+    def h_merge_edges(self) -> np.ndarray | None:
+        """H edges of the merged bins behind the hybrid SF; None if plain adaptive."""
+        return self._h_merge_edges
+
+    @property
+    def method(self) -> str:
+        """'hybrid' or 'adaptive'."""
+        return "adaptive" if self._h_merge_edges is None else "hybrid"
+
     # ── Constructors ──────────────────────────────────────────────────────────
 
     @classmethod
@@ -313,6 +522,7 @@ class APOGEESelectionFunction:
         min_count: int = 5,
         nside_min: int = 8,
         estimator: str = "expectation",
+        h_merge_breaks: tuple[float, ...] | None = H_MERGE_BREAKS_DEFAULT,
         h_bin_size: float | None = None,
         gh_bin_size: float | None = None,
         h_range: tuple[float, float] | None = None,
@@ -342,6 +552,15 @@ class APOGEESelectionFunction:
             are still merged to coarser resolution via *min_count* /
             *nside_min* either way; only the reported value differs, and
             ``'map'`` is not shrunk toward 0.5.
+        h_merge_breaks : interior H edges of the wider "merged" bins used to
+            add angular detail to the adaptive SF (default ``(7.0,)``, i.e.
+            merged bins below and above H = 7 over the H range in use).
+            Within each coarsened cell, the completeness is redistributed
+            across the finer sub-pixels following the merged bin's sky
+            pattern, keeping the cell's expected number of observed stars
+            fixed.  Breaks are snapped to the nearest H bin edge (with a
+            warning); ``()`` merges all H into one bin.  Pass ``None`` to
+            turn merging off and use the plain adaptive SF.
         h_bin_size : H-magnitude bin width in magnitudes.  Must be a positive multiple
             of the denominator's native 0.5-mag step (i.e. 0.5, 1.0, 1.5, …).
             Defaults to the native resolution (0.5 mag).
@@ -503,11 +722,19 @@ class APOGEESelectionFunction:
             nside=nside, H_BINS=H_BINS, GH_BINS=GH_BINS if use_color else None,
         )
 
-        # ── Adaptive SF ───────────────────────────────────────────────────────
-        sf, nside_map = _build_adaptive(
-            hist_all, hist_obs, nside=nside,
-            min_count=min_count, nside_min=nside_min, estimator=estimator,
-        )
+        # ── Hybrid (default) or plain adaptive SF ────────────────────────────
+        if h_merge_breaks is None:
+            h_merge_edges = None
+            sf, nside_map = _build_adaptive(
+                hist_all, hist_obs, nside=nside,
+                min_count=min_count, nside_min=nside_min, estimator=estimator,
+            )
+        else:
+            h_merge_edges = _h_merge_edges(H_BINS, h_merge_breaks)
+            sf, nside_map = _build_hybrid(
+                hist_all, hist_obs, H_BINS, nside, h_merge_edges,
+                min_count=min_count, nside_min=nside_min, estimator=estimator,
+            )
 
         return cls(
             selfunc=sf,
@@ -518,6 +745,7 @@ class APOGEESelectionFunction:
             GH_BINS=GH_BINS if use_color else None,
             nside_map=nside_map,
             estimator=estimator,
+            h_merge_edges=h_merge_edges,
         )
 
     @classmethod
@@ -674,6 +902,8 @@ class APOGEESelectionFunction:
             arrays["GH_BINS"] = self._GH_BINS
         if self._nside_map is not None:
             arrays["nside_map"] = self._nside_map
+        if self._h_merge_edges is not None:
+            arrays["h_merge_edges"] = self._h_merge_edges
         np.savez_compressed(path, **arrays)
 
     @classmethod
@@ -687,6 +917,13 @@ class APOGEESelectionFunction:
             estimator = "expectation" if bool(d["use_prior"]) else "map"
         else:
             estimator = "expectation"
+        if "h_merge_edges" in d:
+            h_merge_edges = d["h_merge_edges"]
+        elif "level_h_edges" in d:
+            # Hybrid files made by the earlier analysis/build_hybrid_selfunc.py.
+            h_merge_edges = d["level_h_edges"]
+        else:
+            h_merge_edges = None   # plain adaptive SF
         return cls(
             selfunc   = d["selfunc"],
             hist_all  = d["hist_all"],
@@ -696,4 +933,5 @@ class APOGEESelectionFunction:
             GH_BINS   = d["GH_BINS"]   if "GH_BINS"   in d else None,
             nside_map = d["nside_map"] if "nside_map" in d else None,
             estimator = estimator,
+            h_merge_edges = h_merge_edges,
         )
