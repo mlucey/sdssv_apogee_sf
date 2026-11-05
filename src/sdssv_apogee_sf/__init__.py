@@ -14,13 +14,20 @@ Quick start::
     completeness = sf.query(coords, H=h_mag, GH=g_mag - h_mag)
 """
 
-from ._selfunc import APOGEESelectionFunction, H_BINS_DEFAULT, GH_BINS_DEFAULT, GAIA_G_LIMIT
+from ._selfunc import (
+    APOGEESelectionFunction,
+    H_BINS_DEFAULT,
+    GH_BINS_DEFAULT,
+    GAIA_G_LIMIT,
+    H_MERGE_BREAKS_DEFAULT,
+)
 
 __all__ = [
     "APOGEESelectionFunction",
     "H_BINS_DEFAULT",
     "GH_BINS_DEFAULT",
     "GAIA_G_LIMIT",
+    "H_MERGE_BREAKS_DEFAULT",
 ]
 
 __version__ = "0.1.0"

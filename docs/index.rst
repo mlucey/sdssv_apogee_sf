@@ -25,6 +25,14 @@ using a Bayesian Beta(1, 1) prior by default.  The sky is pixelised with
 HEALPix and pixels with too few 2MASS sources are adaptively merged to
 coarser resolution.
 
+By default, the completeness inside each coarsened cell is then
+redistributed across its finer sub-pixels following the sky pattern of wider
+merged :math:`H` bins (split at :math:`H = 7`), keeping the cell's expected
+number of observed stars fixed.  Pass ``h_merge_breaks`` to
+:meth:`~sdssv_apogee_sf.APOGEESelectionFunction.from_observed` to choose
+different merged bins, or ``h_merge_breaks=None`` for the plain adaptive
+selection function.
+
 Pass ``estimator='map'`` to :meth:`~sdssv_apogee_sf.APOGEESelectionFunction.from_observed`
 to report the posterior mode instead of the mean. For a uniform Beta(1, 1)
 prior the mode coincides with the raw ratio :math:`S = N_\mathrm{observed} / N_\mathrm{2MASS}`,
